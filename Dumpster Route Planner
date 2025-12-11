@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Dumpster Route Planner — Manual Build</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root{--panel-w:360px;}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;overflow:hidden;background:#121212;color:#fff}
+#map{position:absolute;left:0;top:0;right:var(--panel-w);bottom:0}
+#panel{position:absolute;right:0;top:0;bottom:0;width:var(--panel-w);background:#1e1e1e;border-left:1px solid #333;overflow:auto;padding:12px;box-sizing:border-box;color:#fff}
+h2{margin:0 0 8px 0;font-size:18px;color:#fff}
+.btn{display:inline-block;padding:6px 10px;border-radius:8px;border:none;font-weight:600;cursor:pointer;margin:2px}
+.btnGreen{background:#28a745;color:#fff}
+.btnRed{background:#dc3545;color:#fff}
+.btnYellow{background:#ffc107;color:#000}
+.btn{background:#444;color:#fff}
+.groupBox{background:#2a2a2a;border:1px solid #333;padding:8px;border-radius:8px;margin-bottom:10px;color:#fff}
+.small{font-size:13px;color:#ccc}
+a.link{color:#1e90ff;text-decoration:none;font-weight:600}
+#topInfo{position:absolute;left:8px;top:8px;z-index:1200;background:rgba(0,0,0,0.7);color:#fff;padding:8px 10px;border-radius:10px;font-size:13px}
+.controls-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.note{font-size:12px;color:#888;margin-top:8px}
+#loadingOverlay{
+  position:absolute;top:0;left:0;right:var(--panel-w);bottom:0;
+  background:rgba(0,0,0,0.85);color:#fff;display:flex;
+  flex-direction:column;justify-content:center;align-items:center;font-size:20px;font-weight:bold;z-index:1500;
+  display:none;
+}
+#progressBarContainer{width:80%;height:25px;background:#333;border-radius:12px;overflow:hidden;margin-top:10px}
+#progressBar{height:100%;width:0%;background:#28a745;text-align:center;color:#fff;font-weight:bold;line-height:25px;border-radius:12px}
+.toggleRow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+#resetStatusBtn, #clearMarkersBtn, #importCsvBtn { margin-top: 8px; background:#555; color:#fff; border:none; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h2>Dumpster Route Planner</h2>
+
+  <div class="controls-row">
+    <button id="buildBtn" class="btn">Build Route</button>
+    <button id="showAllBtn" class="btn">Show All</button>
+    <button id="exportBtn" class="btn btnGreen">Export CSV</button>
+  </div>
+
+  <div class="toggleRow">
+    <input type="checkbox" id="toggleAdd" checked>
+    <label for="toggleAdd">Enable adding markers & dragging</label>
+  </div>
+
+  <button id="resetStatusBtn">Reset All Group Status</button>
+  <button id="clearMarkersBtn">Clear All Markers</button>
+  <button id="importCsvBtn">Import CSV</button>
+  <input type="file" id="importFileInput" accept=".csv" class="hidden" />
+
+  <div class="small">Instructions:</div>
+  <ul class="small">
+    <li>Click map to add markers (if enabled). First marker = <b>Start (red S)</b>.</li>
+    <li>Stops = black markers with white letters. Group labels rebuilt on routing.</li>
+    <li>CSV export includes Lat,Lng,Group,GroupStatus.</li>
+    <li>You can re‑import the CSV later to restore the markers + statuses.</li>
+    <li>Route will only build when clicking <b>Build Route</b>.</li>
+  </ul>
+
+  <hr>
+
+  <div id="groupsContainer"></div>
+
+  <div class="note">Markers are draggable — routes & labels rebuild manually via Build Route button.</div>
+</div>
+
+<div id="topInfo">Lat/Lng: --</div>
+
+<div id="loadingOverlay">
+  <div>Building Routes...</div>
+  <div id="progressBarContainer">
+    <div id="progressBar">0%</div>
+  </div>
+</div>
+
+<script>
+// Globals & Map
+const map = L.map('map').setView([47.61, -122.33], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19
+}).addTo(map);
+
+const topInfo = document.getElementById('topInfo');
+const buildBtn = document.getElementById('buildBtn');
+const showAllBtn = document.getElementById('showAllBtn');
+const exportBtn = document.getElementById('exportBtn');
+const resetStatusBtn = document.getElementById('resetStatusBtn');
+const clearMarkersBtn = document.getElementById('clearMarkersBtn');
+const importCsvBtn = document.getElementById('importCsvBtn');
+const importFileInput = document.getElementById('importFileInput');
+const groupsContainer = document.getElementById('groupsContainer');
+const loadingOverlay = document.getElementById('loadingOverlay');
+const progressBar = document.getElementById('progressBar');
+const toggleAddCheckbox = document.getElementById('toggleAdd');
+
+let markers = [];
+let markerIndex = 0;
+let fullRouteLayer = null;
+let groupLayers = [];
+const GROUP_SIZE = 9;
+const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+let addingMarkersEnabled = true;
+let groupStatus = {}; // group -> status
+
+// Helper icons
+function startIcon() {
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width:30px;height:30px;border-radius:50%;background:red;border:2px solid #fff;
+      display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800">S</div>`,
+    iconSize: [30,30],
+    iconAnchor: [15,15]
+  });
+}
+function stopIcon(label) {
+  const txt = label ? label : '';
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width:28px;height:28px;border-radius:50%;background:black;border:2px solid #fff;
+      display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px">
+      ${txt}
+    </div>`,
+    iconSize: [28,28],
+    iconAnchor: [14,14]
+  });
+}
+
+// One-time GPS center on load
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(pos => {
+    const c = pos.coords;
+    map.setView([c.latitude, c.longitude], 14);
+    topInfo.textContent = `Lat/Lng: ${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}`;
+  });
+} else {
+  topInfo.textContent = "Lat/Lng: n/a";
+}
+
+// Toggle adding/dragging
+toggleAddCheckbox.addEventListener('change', e => {
+  addingMarkersEnabled = e.target.checked;
+  markers.forEach(m => {
+    if (m.isStart) return;
+    if (m.dragging) m.dragging[addingMarkersEnabled ? 'enable' : 'disable']();
+  });
+});
+
+// Add marker on click
+map.on('click', e => {
+  if (!addingMarkersEnabled) return;
+  const isStart = markers.length === 0;
+  const label = isStart ? 'S' : (letters[markerIndex++] || 'X');
+  const icon = isStart ? startIcon() : stopIcon('');
+  const m = L.marker(e.latlng, { draggable: addingMarkersEnabled, icon }).addTo(map);
+  m.isStart = isStart;
+  m.letter = label;
+  m.groupLabel = null;
+  markers.push(m);
+  topInfo.textContent = `Lat/Lng: ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+});
+
+// OSRM helper
+async function fetchOSRMRoute(coordsArray) {
+  if (!coordsArray || coordsArray.length < 2) return null;
+  const coords = coordsArray.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+  try {
+    const res = await fetch(url);
+    const j = await res.json();
+    if (j && j.code === 'Ok' && j.routes && j.routes[0]) return j.routes[0].geometry;
+  } catch (e) {
+    console.error('OSRM fetch error', e);
+  }
+  return null;
+}
+
+// Build all routes manually
+async function buildAllRoutes() {
+  if (markers.length < 2) { alert('Place at least 2 markers'); return; }
+  loadingOverlay.style.display = 'flex';
+  progressBar.style.width = '0%'; progressBar.textContent = '0%';
+
+  if (fullRouteLayer) { map.removeLayer(fullRouteLayer); fullRouteLayer = null; }
+  groupLayers.forEach(gl => { if (gl && map.hasLayer(gl)) map.removeLayer(gl); });
+  groupLayers = [];
+
+  const pts = markers.map(m => ({ lat: m.getLatLng().lat, lng: m.getLatLng().lng }));
+  const fullGeo = await fetchOSRMRoute(pts);
+  if (fullGeo) {
+    fullRouteLayer = L.geoJSON(fullGeo, { style: { color: '#000000', weight: 5, opacity: 0.95 } }).addTo(map);
+    map.fitBounds(fullRouteLayer.getBounds(), { padding: [40, 40] });
+  }
+
+  const stops = pts.slice(1);
+  const groups = [];
+  for (let i = 0; i < stops.length; i += GROUP_SIZE) groups.push(stops.slice(i, i + GROUP_SIZE));
+
+  const groupStarts = [];
+  for (let gi = 0; gi < groups.length; gi++) {
+    groupStarts.push(gi === 0 ? pts[0] : groups[gi - 1][groups[gi - 1].length - 1]);
+  }
+
+  for (let gi = 0; gi < groups.length; gi++) {
+    const coordsForRoute = [groupStarts[gi], ...groups[gi]];
+    const geo = await fetchOSRMRoute(coordsForRoute);
+    groupLayers.push(geo ? L.geoJSON(geo, { style: { color: '#000000', weight: 5, opacity: 1 } }) : null);
+
+    const perc = Math.round(((gi + 1) / groups.length) * 100);
+    progressBar.style.width = perc + '%';
+    progressBar.textContent = perc + '%';
+  }
+
+  assignGroupLabels();
+  buildGroupsPanel();
+  loadingOverlay.style.display = 'none';
+}
+
+// Assign icons & group labels
+function assignGroupLabels() {
+  if (markers.length === 0) return;
+  markers[0].setIcon(startIcon());
+  const stops = markers.slice(1);
+  for (let i = 0; i < stops.length; i++) {
+    const groupIndex = Math.floor(i / GROUP_SIZE) + 1;
+    stops[i].setIcon(stopIcon('G' + groupIndex));
+    stops[i].groupLabel = 'G' + groupIndex;
+  }
+}
+
+// Groups Pane
+function buildGroupsPanel() {
+  groupsContainer.innerHTML = '';
+  if (markers.length < 2) {
+    groupsContainer.innerHTML = '<div class="small">No groups yet. Add markers and press Build Route.</div>';
+    return;
+  }
+
+  const pts = markers.map(m => ({ lat: m.getLatLng().lat, lng: m.getLatLng().lng }));
+  const stops = pts.slice(1);
+  const groups = [];
+  for (let i = 0; i < stops.length; i += GROUP_SIZE) groups.push(stops.slice(i, i + GROUP_SIZE));
+
+  groups.forEach((grp, gi) => {
+    const groupNum = gi + 1;
+    const dest = grp[grp.length - 1];
+    const waypoints = grp.slice(0, -1).map(p => `${p.lat},${p.lng}`).join('|');
+    let gUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest.lat},${dest.lng}`;
+    if (waypoints) gUrl += `&waypoints=${waypoints}`;
+    gUrl += `&travelmode=driving`;
+
+    const status = groupStatus[groupNum] || 'None';
+
+    const box = document.createElement('div');
+    box.className = 'groupBox';
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>Group ${groupNum}</strong> &nbsp; <small>(${grp.length} stops)</small></div>
+        <div><button class="btn" data-gi="${gi}">Show</button></div>
+      </div>
+      <div class="small" style="margin-top:6px">Dest: ${dest.lat.toFixed(6)}, ${dest.lng.toFixed(6)}</div>
+      <div style="margin-top:6px">
+        <a class="link" href="${gUrl}" target="_blank">Open in Google Maps</a>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btnGreen" data-group="${groupNum}" data-status="Found Something">Found Something</button>
+        <button class="btn btnYellow" data-group="${groupNum}" data-status="Jackpot">Jackpot</button>
+        <button class="btn btnRed" data-group="${groupNum}" data-status="Found Nothing">Found Nothing</button>
+        <span class="small" style="margin-left:6px">Status: <span id="status${groupNum}">${status}</span></span>
+      </div>
+    `;
+    groupsContainer.appendChild(box);
+  });
+
+  groupsContainer.querySelectorAll('.btn[data-status]').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      const g = ev.currentTarget.dataset.group;
+      const s = ev.currentTarget.dataset.status;
+      groupStatus[g] = s;
+      document.getElementById('status' + g).textContent = s;
+    });
+  });
+
+  groupsContainer.querySelectorAll('.btn:not([data-status])').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      const gi = Number(ev.currentTarget.dataset.gi);
+      showOnlyGroup(gi);
+          });
+            });
+            }
+
+            function showOnlyGroup(groupIndex) {
+              if (fullRouteLayer && map.hasLayer(fullRouteLayer)) map.removeLayer(fullRouteLayer);
+                groupLayers.forEach(gl => { if (gl && map.hasLayer(gl)) map.removeLayer(gl); });
+                  const chosen = groupLayers[groupIndex];
+                    if (!chosen) { alert('Group route not available'); return; }
+                      chosen.addTo(map);
+                        map.fitBounds(chosen.getBounds(), { padding: [30, 30] });
+                        }
+                        
+function showAll() {
+  groupLayers.forEach(gl => { if (gl && map.hasLayer(gl)) map.removeLayer(gl); });
+  if (fullRouteLayer) { fullRouteLayer.addTo(map); map.fitBounds(fullRouteLayer.getBounds(), { padding: [30, 30] }); }
+}
+
+function resetAllGroupStatus() {
+  groupStatus = {};
+  buildGroupsPanel();
+}
+
+function clearAllMarkers() {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  markerIndex = 0;
+  if (fullRouteLayer && map.hasLayer(fullRouteLayer)) map.removeLayer(fullRouteLayer);
+  fullRouteLayer = null;
+  groupLayers.forEach(gl => { if (gl && map.hasLayer(gl)) map.removeLayer(gl); });
+  groupLayers = [];
+  groupStatus = {};
+  groupsContainer.innerHTML = '';
+  topInfo.textContent = "Lat/Lng: --";
+}
+
+// Export CSV
+function exportCSV() {
+  if (markers.length === 0) { alert('No markers to export'); return; }
+  let csv = 'Lat,Lng,Group,GroupStatus\n';
+  markers.forEach((m, i) => {
+    const p = m.getLatLng();
+    const g = m.isStart ? 0 : Math.floor((i - 1) / GROUP_SIZE) + 1;
+    const status = groupStatus[g] || '';
+    csv += `${p.lat},${p.lng},${g},${status}\n`;
+  });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'markers.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Import CSV
+function importCSVFile(file) {
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const text = e.target.result;
+    const rows = text.trim().split('\n');
+    const header = rows.shift().split(',');
+    const idxLat = header.indexOf('Lat');
+    const idxLng = header.indexOf('Lng');
+    const idxGroup = header.indexOf('Group');
+    const idxStatus = header.indexOf('GroupStatus');
+    if (idxLat < 0 || idxLng < 0) { alert('Invalid CSV — missing Lat or Lng columns'); return; }
+    clearAllMarkers();
+    let loaded = [];
+    for (const line of rows) {
+      const cols = line.split(',');
+      const lat = parseFloat(cols[idxLat]);
+      const lng = parseFloat(cols[idxLng]);
+      const g = cols[idxGroup];
+      const st = cols[idxStatus];
+      loaded.push({lat, lng, g, st});
+    }
+    loaded.forEach((pt, i) => {
+      const isStart = (i === 0);
+      const icon = isStart ? startIcon() : stopIcon('');
+      const m = L.marker([pt.lat, pt.lng], { draggable: addingMarkersEnabled, icon }).addTo(map);
+      m.isStart = isStart;
+      m.groupLabel = pt.g;
+      markers.push(m);
+      if (!isStart && pt.g) groupStatus[parseInt(pt.g)] = pt.st;
+    });
+    assignGroupLabels();
+    buildGroupsPanel();
+    alert('CSV data loaded: ' + loaded.length + ' markers');
+  };
+  reader.readAsText(file);
+}
+
+importCsvBtn.addEventListener('click', () => importFileInput.click());
+importFileInput.addEventListener('change', e => {
+  if (e.target.files.length) importCSVFile(e.target.files[0]);
+});
+
+buildBtn.addEventListener('click', async () => { await buildAllRoutes(); });
+showAllBtn.addEventListener('click', () => showAll());
+exportBtn.addEventListener('click', () => exportCSV());
+resetStatusBtn.addEventListener('click', () => { if (confirm('Reset all group statuses?')) resetAllGroupStatus(); });
+clearMarkersBtn.addEventListener('click', () => { if (confirm('Clear all markers?')) clearAllMarkers(); });
+
+</script>
+
+</body>
+</html>
