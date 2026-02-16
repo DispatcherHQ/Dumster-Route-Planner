@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Adjustable Voice Notes Grid</title>
+<title>Adjustable Voice Notes Grid with Extras</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <style>
   :root {
     --right-width: 30%;
     --line-top: 25%;
+    --btn-height: 48px; /* default button height */
   }
 
   html, body {
@@ -22,10 +23,19 @@
     padding: 6px;
     font-size: 14px;
     border-bottom: 1px solid #ccc;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
 
   #controls input {
     width: 60px;
+  }
+
+  #fullscreenBtn {
+    padding: 2px 8px;
+    font-size: 12px;
   }
 
   #layout {
@@ -82,7 +92,29 @@
     width: 100%;
   }
 
-  /* RIGHT: scrollable with one big toggle button */
+  /* bottom-left "map" area: under the line */
+  #map-area {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: var(--line-top);
+    bottom: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-start;
+    pointer-events: none; /* visual only for now */
+  }
+
+  #map-label {
+    margin: 6px;
+    padding: 4px 8px;
+    border: 1px dashed #999;
+    font-size: 13px;
+    color: #555;
+    background: #f9f9f9;
+  }
+
+  /* RIGHT: scrollable with buttons */
   #right {
     border-left: 1px solid #888;
     overflow-y: auto;
@@ -102,15 +134,18 @@
     gap: 10px;
   }
 
-  #recordButton {
-    padding: 18px;
-    font-size: 18px;
+  .btn-like {
+    width: 100%;
+    font-size: 16px;
     border-radius: 8px;
     border: none;
-    background: #e53935;
     color: #fff;
     text-align: center;
-    width: 100%;
+    height: var(--btn-height);
+  }
+
+  #recordButton {
+    background: #e53935;
   }
 
   #recordButton.recording {
@@ -119,6 +154,23 @@
 
   #recordButton.playing {
     background: #f9a825;
+  }
+
+  /* dummy buttons */
+  #dummyBtn1 {
+    background: #5e35b1;
+  }
+
+  #dummyBtn2 {
+    background: #5e35b1;
+  }
+
+  #dummyBtn3 {
+    background: #5e35b1;
+  }
+
+  #dummyBtn4 {
+    background: #5e35b1;
   }
 
   #record-status {
@@ -132,25 +184,35 @@
 
 <div id="controls">
   Right width (%):
-  <input id="rightWidthInput" type="number" min="15" max="70" value="30">
-  &nbsp; Line top (%):
-  <input id="lineTopInput" type="number" min="10" max="80" value="25">
+  <input id="rightWidthInput" type="number" min="10" max="100" value="30">
+  Line top (%):
+  <input id="lineTopInput" type="number" min="10" max="100" value="25">
+  Button height (px):
+  <input id="btnHeightInput" type="number" min="32" max="500" value="48">
+  <button id="fullscreenBtn">Full screen</button>
 </div>
 
 <div id="layout">
-  <!-- LEFT: notes container above the line -->
+  <!-- LEFT: notes container above the line + map below -->
   <div id="left">
     <div id="notes-box">
       <h2>Voice notes</h2>
       <div id="notes-list"></div>
     </div>
     <div id="h-line"></div>
+    <div id="map-area">
+      <div style="width: 800px; height: 400px; text-align: center; font-size: 200px;">MAP</div>
+    </div>
   </div>
 
-  <!-- RIGHT: mobile-friendly single button -->
+  <!-- RIGHT: mobile-friendly buttons -->
   <div id="right">
     <div id="right-inner">
-      <button id="recordButton">Start recording</button>
+      <button id="recordButton" class="btn-like">Start recording</button>
+      <button id="dummyBtn1" class="btn-like">Dummy button 1</button>
+      <button id="dummyBtn2" class="btn-like">Dummy button 2</button>
+      <button id="dummyBtn3" class="btn-like">Dummy button 3</button>
+      <button id="dummyBtn4" class="btn-like">Dummy button 4</button>
       <div id="record-status"></div>
     </div>
   </div>
@@ -158,16 +220,17 @@
 
 <script>
 (function () {
-  // numeric adjustability for columns/row
+  // numeric adjustability for columns, line, and button height
   var root = document.documentElement;
   var rightWidthInput = document.getElementById('rightWidthInput');
   var lineTopInput = document.getElementById('lineTopInput');
+  var btnHeightInput = document.getElementById('btnHeightInput');
 
   function updateRightWidth() {
     var val = parseFloat(rightWidthInput.value);
     if (isNaN(val)) return;
     if (val < 15) val = 15;
-    if (val > 70) val = 70;
+    if (val > 100) val = 100;
     rightWidthInput.value = val;
     root.style.setProperty('--right-width', val + '%');
   }
@@ -176,15 +239,41 @@
     var val = parseFloat(lineTopInput.value);
     if (isNaN(val)) return;
     if (val < 10) val = 10;
-    if (val > 80) val = 80;
+    if (val > 100) val = 100;
     lineTopInput.value = val;
     root.style.setProperty('--line-top', val + '%');
   }
 
+  function updateBtnHeight() {
+    var val = parseFloat(btnHeightInput.value);
+    if (isNaN(val)) return;
+    if (val < 32) val = 32;
+    if (val > 500) val = 500;
+    btnHeightInput.value = val;
+    root.style.setProperty('--btn-height', val + 'px');
+  }
+
   rightWidthInput.addEventListener('input', updateRightWidth);
   lineTopInput.addEventListener('input', updateLineTop);
+  btnHeightInput.addEventListener('input', updateBtnHeight);
+
   updateRightWidth();
   updateLineTop();
+  updateBtnHeight();
+
+  // fullscreen toggle
+  var fullscreenBtn = document.getElementById('fullscreenBtn');
+  fullscreenBtn.addEventListener('click', function () {
+    if (!document.fullscreenElement) {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  });
 
   // recording + playback
   var recordButton = document.getElementById('recordButton');
@@ -194,7 +283,6 @@
   var mediaRecorder = null;
   var chunks = [];
   var state = 'idle'; // 'idle' | 'recording' | 'playing'
-  var lastBlob = null;
   var lastAudioElement = null;
   var noteCounter = 1;
 
@@ -259,15 +347,12 @@
           if (e.data && e.data.size > 0) chunks.push(e.data);
         };
         mediaRecorder.onstop = function () {
-          lastBlob = new Blob(chunks, { type: 'audio/webm' });
-          // auto-save: add note to top box
-          lastAudioElement = appendNote(lastBlob);
-          // auto-download for protection
-          triggerDownload(lastBlob);
+          var blob = new Blob(chunks, { type: 'audio/webm' });
+          lastAudioElement = appendNote(blob);
+          triggerDownload(blob);
           statusSpan.textContent = 'Note saved and downloading...';
           stream.getTracks().forEach(function (t) { t.stop(); });
 
-          // auto-play the just-recorded note
           if (lastAudioElement) {
             setButtonState('playing');
             lastAudioElement.currentTime = 0;
@@ -289,13 +374,11 @@
       });
 
     } else if (state === 'recording') {
-      // stop recording
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
       }
 
     } else if (state === 'playing') {
-      // stop replay and go back to idle
       if (lastAudioElement) {
         lastAudioElement.pause();
         lastAudioElement.currentTime = 0;
