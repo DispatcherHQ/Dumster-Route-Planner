@@ -228,27 +228,18 @@
 
   function updateRightWidth() {
     var val = parseFloat(rightWidthInput.value);
-    if (isNaN(val)) return;
-    if (val < 15) val = 15;
-    if (val > 100) val = 100;
     rightWidthInput.value = val;
     root.style.setProperty('--right-width', val + '%');
   }
 
   function updateLineTop() {
     var val = parseFloat(lineTopInput.value);
-    if (isNaN(val)) return;
-    if (val < 10) val = 10;
-    if (val > 100) val = 100;
     lineTopInput.value = val;
     root.style.setProperty('--line-top', val + '%');
   }
 
   function updateBtnHeight() {
     var val = parseFloat(btnHeightInput.value);
-    if (isNaN(val)) return;
-    if (val < 32) val = 32;
-    if (val > 500) val = 500;
     btnHeightInput.value = val;
     root.style.setProperty('--btn-height', val + 'px');
   }
