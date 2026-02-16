@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Mobile Voice Notes Auto-Save</title>
+<title>Adjustable Voice Notes Grid</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <style>
   :root {
@@ -18,10 +18,20 @@
     font-family: system-ui, sans-serif;
   }
 
+  #controls {
+    padding: 6px;
+    font-size: 14px;
+    border-bottom: 1px solid #ccc;
+  }
+
+  #controls input {
+    width: 60px;
+  }
+
   #layout {
     display: grid;
     grid-template-columns: minmax(0, calc(100% - var(--right-width))) var(--right-width);
-    height: 100%;
+    height: calc(100% - 40px);
   }
 
   /* LEFT: notes above the horizontal line */
@@ -72,7 +82,7 @@
     width: 100%;
   }
 
-  /* RIGHT: scrollable, big toggle button */
+  /* RIGHT: scrollable with one big toggle button */
   #right {
     border-left: 1px solid #888;
     overflow-y: auto;
@@ -107,6 +117,10 @@
     background: #388e3c;
   }
 
+  #recordButton.playing {
+    background: #f9a825;
+  }
+
   #record-status {
     font-size: 13px;
     color: #b00;
@@ -115,6 +129,13 @@
 </style>
 </head>
 <body>
+
+<div id="controls">
+  Right width (%):
+  <input id="rightWidthInput" type="number" min="15" max="70" value="30">
+  &nbsp; Line top (%):
+  <input id="lineTopInput" type="number" min="10" max="80" value="25">
+</div>
 
 <div id="layout">
   <!-- LEFT: notes container above the line -->
@@ -137,23 +158,57 @@
 
 <script>
 (function () {
+  // numeric adjustability for columns/row
+  var root = document.documentElement;
+  var rightWidthInput = document.getElementById('rightWidthInput');
+  var lineTopInput = document.getElementById('lineTopInput');
+
+  function updateRightWidth() {
+    var val = parseFloat(rightWidthInput.value);
+    if (isNaN(val)) return;
+    if (val < 15) val = 15;
+    if (val > 70) val = 70;
+    rightWidthInput.value = val;
+    root.style.setProperty('--right-width', val + '%');
+  }
+
+  function updateLineTop() {
+    var val = parseFloat(lineTopInput.value);
+    if (isNaN(val)) return;
+    if (val < 10) val = 10;
+    if (val > 80) val = 80;
+    lineTopInput.value = val;
+    root.style.setProperty('--line-top', val + '%');
+  }
+
+  rightWidthInput.addEventListener('input', updateRightWidth);
+  lineTopInput.addEventListener('input', updateLineTop);
+  updateRightWidth();
+  updateLineTop();
+
+  // recording + playback
   var recordButton = document.getElementById('recordButton');
   var statusSpan = document.getElementById('record-status');
   var notesList = document.getElementById('notes-list');
 
   var mediaRecorder = null;
   var chunks = [];
-  var isRecording = false;
+  var state = 'idle'; // 'idle' | 'recording' | 'playing'
+  var lastBlob = null;
+  var lastAudioElement = null;
   var noteCounter = 1;
 
-  function setRecordingUI(on) {
-    isRecording = on;
-    if (on) {
+  function setButtonState(newState) {
+    state = newState;
+    recordButton.classList.remove('recording', 'playing');
+    if (state === 'idle') {
+      recordButton.textContent = 'Start recording';
+    } else if (state === 'recording') {
       recordButton.textContent = 'Stop recording';
       recordButton.classList.add('recording');
-    } else {
-      recordButton.textContent = 'Start recording';
-      recordButton.classList.remove('recording');
+    } else if (state === 'playing') {
+      recordButton.textContent = 'Stop replay';
+      recordButton.classList.add('playing');
     }
   }
 
@@ -173,14 +228,15 @@
 
     notesList.insertBefore(item, notesList.firstChild);
     noteCounter++;
+
+    return audio;
   }
 
   function triggerDownload(blob) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
-    a.href = url;
-    // use timestamp for unique filename
     var ts = new Date().toISOString().replace(/[:.]/g, '-');
+    a.href = url;
     a.download = 'voice-note-' + ts + '.webm';
     document.body.appendChild(a);
     a.click();
@@ -189,8 +245,8 @@
   }
 
   recordButton.addEventListener('click', function () {
-    if (!isRecording) {
-      // START recording
+    if (state === 'idle') {
+      // start recording
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         statusSpan.textContent = 'Recording not supported in this browser.';
         return;
@@ -203,26 +259,53 @@
           if (e.data && e.data.size > 0) chunks.push(e.data);
         };
         mediaRecorder.onstop = function () {
-          var blob = new Blob(chunks, { type: 'audio/webm' });
-          appendNote(blob);       // show in top box
-          triggerDownload(blob);  // auto download for protection
-          statusSpan.textContent = 'Note saved.';
+          lastBlob = new Blob(chunks, { type: 'audio/webm' });
+          // auto-save: add note to top box
+          lastAudioElement = appendNote(lastBlob);
+          // auto-download for protection
+          triggerDownload(lastBlob);
+          statusSpan.textContent = 'Note saved and downloading...';
           stream.getTracks().forEach(function (t) { t.stop(); });
+
+          // auto-play the just-recorded note
+          if (lastAudioElement) {
+            setButtonState('playing');
+            lastAudioElement.currentTime = 0;
+            lastAudioElement.play().catch(function(){});
+            lastAudioElement.onended = function () {
+              if (state === 'playing') {
+                setButtonState('idle');
+              }
+            };
+          } else {
+            setButtonState('idle');
+          }
         };
         mediaRecorder.start();
         statusSpan.textContent = 'Recording...';
-        setRecordingUI(true);
+        setButtonState('recording');
       }).catch(function () {
         statusSpan.textContent = 'Microphone access denied or unavailable.';
       });
-    } else {
-      // STOP recording
+
+    } else if (state === 'recording') {
+      // stop recording
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
       }
-      setRecordingUI(false);
+
+    } else if (state === 'playing') {
+      // stop replay and go back to idle
+      if (lastAudioElement) {
+        lastAudioElement.pause();
+        lastAudioElement.currentTime = 0;
+      }
+      setButtonState('idle');
+      statusSpan.textContent = '';
     }
   });
+
+  setButtonState('idle');
 })();
 </script>
 
